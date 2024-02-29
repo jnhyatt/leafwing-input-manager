@@ -18,15 +18,20 @@ fn main() {
 enum Action {
     Left,
     Right,
+    Jump,
 }
 
 #[derive(Component)]
 struct Player;
 
+#[derive(Component)]
+struct YVelocity(f32);
+
 fn spawn_player(mut commands: Commands) {
     let input_map = InputMap::new([
         (Action::Left, KeyCode::ArrowLeft),
         (Action::Right, KeyCode::ArrowRight),
+        (Action::Jump, KeyCode::Space),
     ]);
 
     commands
@@ -42,7 +47,8 @@ fn spawn_player(mut commands: Commands) {
             ..Default::default()
         })
         .insert(InputManagerBundle::with_map(input_map))
-        .insert(Player);
+        .insert(Player)
+        .insert(YVelocity(0.0));
 }
 
 fn spawn_cameras(mut commands: Commands) {
@@ -66,6 +72,23 @@ fn spawn_ui(mut commands: Commands, player_query: Query<Entity, With<Player>>) {
         // This component links the button to the entity with the `ActionState` component
         .insert(ActionStateDriver {
             action: Action::Left,
+            targets: player_entity.into(),
+        })
+        .id();
+
+    // Jump
+    let jump_button = commands
+        .spawn(ButtonBundle {
+            style: Style {
+                width: Val::Px(150.0),
+                height: Val::Px(150.0),
+                ..Default::default()
+            },
+            background_color: Color::GREEN.into(),
+            ..Default::default()
+        })
+        .insert(ActionStateDriver {
+            action: Action::Jump,
             targets: player_entity.into(),
         })
         .id();
@@ -99,15 +122,33 @@ fn spawn_ui(mut commands: Commands, player_query: Query<Entity, With<Player>>) {
             background_color: Color::NONE.into(),
             ..Default::default()
         })
-        .push_children(&[left_button, right_button]);
+        .push_children(&[left_button, jump_button, right_button]);
 }
 
-fn move_player(mut query: Query<(&ActionState<Action>, &mut Transform), With<Player>>) {
-    let (action_state, mut transform) = query.single_mut();
+const GRAVITY: f32 = -0.6;
 
-    // To only perform the action once when the button is first clicked,
-    // use `.just_pressed` instead.
-    // To trigger when the click is released, use `.just_released`
+fn move_player(
+    mut query: Query<(&ActionState<Action>, &mut YVelocity, &mut Transform), With<Player>>,
+) {
+    let (action_state, mut y_velocity, mut transform) = query.single_mut();
+
+    // Apply gravity
+    transform.translation.y += y_velocity.0;
+    y_velocity.0 += GRAVITY;
+
+    // Zero out y-velocity and only allow jump if player is grounded
+    if transform.translation.y <= 0.0 {
+        transform.translation.y = 0.0;
+        y_velocity.0 = 0.0;
+
+        // To only perform the action once when the button is first clicked,
+        // use `.just_pressed` instead.
+        // To trigger when the click is released, use `.just_released`
+        if action_state.just_pressed(&Action::Jump) {
+            y_velocity.0 = 20.0;
+        }
+    }
+
     if action_state.pressed(&Action::Left) {
         transform.translation.x -= 10.;
     }
