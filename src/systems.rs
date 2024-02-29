@@ -156,6 +156,13 @@ pub fn update_action_state_from_interaction<A: Actionlike>(
                     .expect("Entity does not exist, or does not have an `ActionState` component.");
                 action_state.press(&action_state_driver.action.clone());
             }
+        } else {
+            for entity in action_state_driver.targets.iter() {
+                let mut action_state = action_state_query
+                    .get_mut(*entity)
+                    .expect("Entity does not exist, or does not have an `ActionState` component.");
+                action_state.release(&action_state_driver.action.clone());
+            }
         }
     }
 }

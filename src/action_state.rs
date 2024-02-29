@@ -115,7 +115,7 @@ impl<A: Actionlike> ActionState<A> {
                     ButtonState::JustPressed => self.press(&action),
                     ButtonState::Pressed => self.press(&action),
                     ButtonState::JustReleased => self.release(&action),
-                    ButtonState::Released => self.release(&action),
+                    _ => {}
                 }
 
                 let current_data = self.action_data.get_mut(&action).unwrap();
