@@ -6,7 +6,7 @@
 //! Note that [`ActionState`] can also be serialized and sent directly.
 //! This approach will be less bandwidth efficient, but involve less complexity and CPU work.
 
-use bevy::ecs::event::{Events, ManualEventReader};
+use bevy::ecs::event::ManualEventReader;
 use bevy::input::InputPlugin;
 use bevy::prelude::*;
 use leafwing_input_manager::action_diff::ActionDiffEvent;
@@ -22,10 +22,6 @@ enum FpsAction {
     Jump,
     Shoot,
 }
-
-/// This identifier uniquely identifies entities across the network
-#[derive(Component, Clone, PartialEq, Eq, Hash, Debug)]
-struct StableId(u64);
 
 /// Processes an [`Events`] stream of [`ActionDiff`] to update an [`ActionState`]
 ///
@@ -73,14 +69,14 @@ fn main() {
     client_app.update();
 
     // Sending inputs to the client
-    client_app.send_input(KeyCode::Space);
-    client_app.send_input(MouseButton::Left);
+    client_app.press_input(KeyCode::Space);
+    client_app.press_input(MouseButton::Left);
 
     // These are converted into actions when the client_app's `Schedule` runs
     client_app.update();
 
-    let mut player_state_query = client_app.world.query::<&ActionState<FpsAction>>();
-    let player_state = player_state_query.iter(&client_app.world).next().unwrap();
+    let mut player_state_query = client_app.world_mut().query::<&ActionState<FpsAction>>();
+    let player_state = player_state_query.iter(client_app.world()).next().unwrap();
     assert!(player_state.pressed(&FpsAction::Jump));
     assert!(player_state.pressed(&FpsAction::Shoot));
 
@@ -92,16 +88,16 @@ fn main() {
     server_app.update();
 
     // And the actions are pressed on the server!
-    let mut player_state_query = server_app.world.query::<&ActionState<FpsAction>>();
-    let player_state = player_state_query.iter(&server_app.world).next().unwrap();
+    let mut player_state_query = server_app.world_mut().query::<&ActionState<FpsAction>>();
+    let player_state = player_state_query.iter(server_app.world()).next().unwrap();
     assert!(player_state.pressed(&FpsAction::Jump));
     assert!(player_state.pressed(&FpsAction::Shoot));
 
     // If we wait a tick, the buttons will be released
     client_app.reset_inputs();
     client_app.update();
-    let mut player_state_query = client_app.world.query::<&ActionState<FpsAction>>();
-    let player_state = player_state_query.iter(&client_app.world).next().unwrap();
+    let mut player_state_query = client_app.world_mut().query::<&ActionState<FpsAction>>();
+    let player_state = player_state_query.iter(client_app.world()).next().unwrap();
     assert!(player_state.released(&FpsAction::Jump));
     assert!(player_state.released(&FpsAction::Shoot));
 
@@ -112,8 +108,8 @@ fn main() {
 
     server_app.update();
 
-    let mut player_state_query = server_app.world.query::<&ActionState<FpsAction>>();
-    let player_state = player_state_query.iter(&server_app.world).next().unwrap();
+    let mut player_state_query = server_app.world_mut().query::<&ActionState<FpsAction>>();
+    let player_state = player_state_query.iter(server_app.world()).next().unwrap();
     assert!(player_state.released(&FpsAction::Jump));
     assert!(player_state.released(&FpsAction::Shoot));
 }
@@ -126,8 +122,7 @@ fn spawn_player(mut commands: Commands) {
     use KeyCode::*;
 
     let input_map = InputMap::new([(MoveLeft, KeyW), (MoveRight, KeyD), (Jump, Space)])
-        .insert(Shoot, MouseButton::Left)
-        .build();
+        .with(Shoot, MouseButton::Left);
     commands
         .spawn(InputManagerBundle::with_map(input_map))
         .insert(Player);
@@ -145,8 +140,8 @@ fn send_events<A: Send + Sync + 'static + Debug + Clone + Event>(
     server_app: &mut App,
     reader: Option<ManualEventReader<A>>,
 ) -> ManualEventReader<A> {
-    let client_events: &Events<A> = client_app.world.resource();
-    let mut server_events: Mut<Events<A>> = server_app.world.resource_mut();
+    let client_events: &Events<A> = client_app.world().resource();
+    let mut server_events: Mut<Events<A>> = server_app.world_mut().resource_mut();
 
     // Get an event reader, one way or another
     let mut reader = reader.unwrap_or_else(|| client_events.get_reader());

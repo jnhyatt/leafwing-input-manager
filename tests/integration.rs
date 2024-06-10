@@ -71,25 +71,46 @@ fn disable_input() {
         .add_systems(PreUpdate, respect_fades);
 
     // Press F to pay respects
-    app.send_input(KeyCode::KeyF);
+    app.press_input(KeyCode::KeyF);
     app.update();
-    let respect = app.world.resource::<Respect>();
+    let respect = app.world().resource::<Respect>();
     assert_eq!(*respect, Respect(true));
 
-    // Disable the input
-    let mut toggle_actions = app.world.resource_mut::<ToggleActions<Action>>();
-    toggle_actions.enabled = false;
+    // Disable the global input
+    let mut action_state = app.world_mut().resource_mut::<ActionState<Action>>();
+    action_state.disable_all();
+
+    // But the player is still paying respects
+    app.update();
+    let respect = app.world().resource::<Respect>();
+    assert_eq!(*respect, Respect(true));
+
+    // Disable the player's input too
+    let mut action_state = app
+        .world_mut()
+        .query_filtered::<&mut ActionState<Action>, With<Player>>()
+        .single_mut(app.world_mut());
+    action_state.disable_all();
 
     // Now, all respect has faded
     app.update();
-    let respect = app.world.resource::<Respect>();
+    let respect = app.world().resource::<Respect>();
     assert_eq!(*respect, Respect(false));
 
     // And even pressing F cannot bring it back
-    app.send_input(KeyCode::KeyF);
+    app.press_input(KeyCode::KeyF);
     app.update();
-    let respect = app.world.resource::<Respect>();
+    let respect = app.world().resource::<Respect>();
     assert_eq!(*respect, Respect(false));
+
+    // Re-enable the global input
+    let mut action_state = app.world_mut().resource_mut::<ActionState<Action>>();
+    action_state.enable_all();
+
+    // And it will start paying respects again
+    app.update();
+    let respect = app.world().resource::<Respect>();
+    assert_eq!(*respect, Respect(true));
 }
 
 #[test]
@@ -113,25 +134,25 @@ fn release_when_input_map_removed() {
         .add_systems(PreUpdate, respect_fades);
 
     // Press F to pay respects
-    app.send_input(KeyCode::KeyF);
+    app.press_input(KeyCode::KeyF);
     app.update();
-    let respect = app.world.resource::<Respect>();
+    let respect = app.world().resource::<Respect>();
     assert_eq!(*respect, Respect(true));
 
     // Remove the InputMap
-    app.world.remove_resource::<InputMap<Action>>();
+    app.world_mut().remove_resource::<InputMap<Action>>();
     // Needs an extra frame for the resource removed detection to release inputs
     app.update();
 
     // Now, all respect has faded
     app.update();
-    let respect = app.world.resource::<Respect>();
+    let respect = app.world().resource::<Respect>();
     assert_eq!(*respect, Respect(false));
 
     // And even pressing F cannot bring it back
-    app.send_input(KeyCode::KeyF);
+    app.press_input(KeyCode::KeyF);
     app.update();
-    let respect = app.world.resource::<Respect>();
+    let respect = app.world().resource::<Respect>();
     assert_eq!(*respect, Respect(false));
 }
 
@@ -175,37 +196,38 @@ fn action_state_driver() {
 
     app.update();
 
-    let respect = app.world.resource::<Respect>();
+    let respect = app.world().resource::<Respect>();
     assert_eq!(*respect, Respect(false));
 
     // Click the button to pay respects
     app.click_button::<ButtonMarker>();
 
     // Verify that the button was in fact clicked
-    let mut button_query = app.world.query::<&Interaction>();
-    let interaction = button_query.iter(&app.world).next().unwrap();
+    let mut button_query = app.world_mut().query::<&Interaction>();
+    let interaction = button_query.iter(app.world()).next().unwrap();
     assert_eq!(*interaction, Interaction::Pressed);
 
     // Run the app once to process the clicks
     app.update();
 
     // Check the action state
-    let mut action_state_query = app.world.query::<&ActionState<Action>>();
-    let action_state = action_state_query.iter(&app.world).next().unwrap();
+    let mut action_state_query = app.world_mut().query::<&ActionState<Action>>();
+    let action_state = action_state_query.iter(app.world()).next().unwrap();
     assert!(action_state.pressed(&Action::PayRespects));
 
     // Check the effects of that action state
-    let respect = app.world.resource::<Respect>();
+    let respect = app.world().resource::<Respect>();
     assert_eq!(*respect, Respect(true));
 
     // Clear inputs
     app.reset_inputs();
     app.update();
 
-    let respect = app.world.resource::<Respect>();
+    let respect = app.world().resource::<Respect>();
     assert_eq!(*respect, Respect(false));
 }
 
+#[cfg(feature = "timing")]
 #[test]
 fn duration() {
     use bevy::input::InputPlugin;
@@ -243,7 +265,7 @@ fn duration() {
     app.update();
 
     // Press
-    app.send_input(KeyCode::KeyF);
+    app.press_input(KeyCode::KeyF);
 
     // Hold
     std::thread::sleep(2 * RESPECTFUL_DURATION);
@@ -251,7 +273,7 @@ fn duration() {
     // Check
     app.update();
     assert!(app
-        .world
+        .world()
         .resource::<ActionState<Action>>()
         .pressed(&Action::PayRespects));
 }

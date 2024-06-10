@@ -1,6 +1,7 @@
 //! This module contains [`ActionState`] and its supporting methods and impls.
 
 use crate::action_diff::ActionDiff;
+#[cfg(feature = "timing")]
 use crate::timing::Timing;
 use crate::Actionlike;
 use crate::{axislike::DualAxisData, buttonlike::ButtonState};
@@ -8,7 +9,9 @@ use crate::{axislike::DualAxisData, buttonlike::ButtonState};
 use bevy::ecs::component::Component;
 use bevy::prelude::Resource;
 use bevy::reflect::Reflect;
-use bevy::utils::{Duration, HashMap, Instant};
+#[cfg(feature = "timing")]
+use bevy::utils::Duration;
+use bevy::utils::{HashMap, Instant};
 use serde::{Deserialize, Serialize};
 
 /// Metadata about an [`Actionlike`] action
@@ -18,6 +21,10 @@ use serde::{Deserialize, Serialize};
 pub struct ActionData {
     /// Is the action pressed or released?
     pub state: ButtonState,
+    /// The `state` of the action in the `Main` schedule
+    pub update_state: ButtonState,
+    /// The `state` of the action in the `FixedMain` schedule
+    pub fixed_update_state: ButtonState,
     /// The "value" of the binding that triggered the action.
     ///
     /// See [`ActionState::value`] for more details.
@@ -28,12 +35,47 @@ pub struct ActionData {
     /// The [`DualAxisData`] of the binding that triggered the action.
     pub axis_pair: Option<DualAxisData>,
     /// When was the button pressed / released, and how long has it been held for?
+    #[cfg(feature = "timing")]
     pub timing: Timing,
     /// Was this action consumed by [`ActionState::consume`]?
     ///
     /// Actions that are consumed cannot be pressed again until they are explicitly released.
     /// This ensures that consumed actions are not immediately re-pressed by continued inputs.
     pub consumed: bool,
+    /// Is the action disabled?
+    ///
+    /// While disabled, an action will always report as released, regardless of its actual state.
+    pub disabled: bool,
+}
+
+impl ActionData {
+    /// Is the action currently pressed?
+    #[inline]
+    #[must_use]
+    pub fn pressed(&self) -> bool {
+        !self.disabled && self.state.pressed()
+    }
+
+    /// Was the action pressed since the last time it was ticked?
+    #[inline]
+    #[must_use]
+    pub fn just_pressed(&self) -> bool {
+        !self.disabled && self.state.just_pressed()
+    }
+
+    /// Is the action currently released?
+    #[inline]
+    #[must_use]
+    pub fn released(&self) -> bool {
+        self.disabled || self.state.released()
+    }
+
+    /// Was the action released since the last time it was ticked?
+    #[inline]
+    #[must_use]
+    pub fn just_released(&self) -> bool {
+        !self.disabled && self.state.just_released()
+    }
 }
 
 /// Stores the canonical input-method-agnostic representation of the inputs received
@@ -98,6 +140,30 @@ impl<A: Actionlike> Default for ActionState<A> {
 }
 
 impl<A: Actionlike> ActionState<A> {
+    /// We are about to enter the `Main` schedule, so we:
+    /// - save all the changes applied to `state` into the `fixed_update_state`
+    /// - switch to loading the `update_state`
+    pub(crate) fn swap_to_update_state(&mut self) {
+        for (_action, action_datum) in self.action_data.iter_mut() {
+            // save the changes applied to `state` into `fixed_update_state`
+            action_datum.fixed_update_state = action_datum.state;
+            // switch to loading the `update_state` into `state`
+            action_datum.state = action_datum.update_state;
+        }
+    }
+
+    /// We are about to enter the `FixedMain` schedule, so we:
+    /// - save all the changes applied to `state` into the `update_state`
+    /// - switch to loading the `fixed_update_state`
+    pub(crate) fn swap_to_fixed_update_state(&mut self) {
+        for (_action, action_datum) in self.action_data.iter_mut() {
+            // save the changes applied to `state` into `update_state`
+            action_datum.update_state = action_datum.state;
+            // switch to loading the `fixed_update_state` into `state`
+            action_datum.state = action_datum.fixed_update_state;
+        }
+    }
+
     /// Updates the [`ActionState`] based on a vector of [`ActionData`], ordered by [`Actionlike::id`](Actionlike).
     ///
     /// The `action_data` is typically constructed from [`InputMap::which_pressed`](crate::input_map::InputMap),
@@ -171,33 +237,57 @@ impl<A: Actionlike> ActionState<A> {
     /// assert!(action_state.pressed(&Action::Jump));
     /// assert!(!action_state.just_pressed(&Action::Jump));
     /// ```
-    pub fn tick(&mut self, current_instant: Instant, previous_instant: Instant) {
+    pub fn tick(&mut self, _current_instant: Instant, _previous_instant: Instant) {
         // Advanced the ButtonState
         self.action_data.values_mut().for_each(|ad| ad.state.tick());
 
-        // Advance the Timings
+        // Advance the Timings if the feature is enabled
+        #[cfg(feature = "timing")]
         self.action_data.values_mut().for_each(|ad| {
             // Durations should not advance while actions are consumed
             if !ad.consumed {
-                ad.timing.tick(current_instant, previous_instant);
+                ad.timing.tick(_current_instant, _previous_instant);
             }
         });
     }
 
-    /// A reference of the [`ActionData`] corresponding to the `action` if populated.
+    /// A reference of the [`ActionData`] corresponding to the `action` if triggered.
     ///
     /// Generally, it'll be clearer to call `pressed` or so on directly on the [`ActionState`].
     /// However, accessing the raw data directly allows you to examine detailed metadata holistically.
+    ///
+    /// # Caution
+    ///
+    /// To access the [`ActionData`] regardless of whether the `action` has been triggered,
+    /// use [`unwrap_or_default`](Option::unwrap_or_default) on the returned [`Option`].
+    ///
+    /// # Returns
+    ///
+    /// - `Some(ActionData)` if it exists.
+    /// - `None` if the `action` has never been triggered (pressed, clicked, etc.).
     #[inline]
     #[must_use]
     pub fn action_data(&self, action: &A) -> Option<&ActionData> {
         self.action_data.get(action)
     }
 
-    /// A mutable reference of the [`ActionData`] corresponding to the `action` if populated.
+    /// A mutable reference of the [`ActionData`] corresponding to the `action` if triggered.
     ///
     /// Generally, it'll be clearer to call `pressed` or so on directly on the [`ActionState`].
     /// However, accessing the raw data directly allows you to examine detailed metadata holistically.
+    ///
+    /// # Caution
+    ///
+    /// - To access the [`ActionData`] regardless of whether the `action` has been triggered,
+    /// use [`unwrap_or_default`](Option::unwrap_or_default) on the returned [`Option`].
+    ///
+    /// - To insert a default [`ActionData`] if it doesn't exist,
+    /// use [`action_data_mut_or_default`](Self::action_data_mut_or_default) method.
+    ///
+    /// # Returns
+    ///
+    /// - `Some(ActionData)` if it exists.
+    /// - `None` if the `action` has never been triggered (pressed, clicked, etc.).
     #[inline]
     #[must_use]
     pub fn action_data_mut(&mut self, action: &A) -> Option<&mut ActionData> {
@@ -205,6 +295,10 @@ impl<A: Actionlike> ActionState<A> {
     }
 
     /// A mutable reference of the [`ActionData`] corresponding to the `action`.
+    ///
+    /// If the `action` has no data yet (because the `action` has not been triggered),
+    /// this method will create and insert a default [`ActionData`] for you,
+    /// avoiding potential errors from unwrapping [`None`].
     ///
     /// Generally, it'll be clearer to call `pressed` or so on directly on the [`ActionState`].
     /// However, accessing the raw data directly allows you to examine detailed metadata holistically.
@@ -224,9 +318,9 @@ impl<A: Actionlike> ActionState<A> {
     ///
     /// - Binary buttons will have a value of `0.0` when the button is not pressed, and a value of
     /// `1.0` when the button is pressed.
-    /// - Some axes, such as an analog stick, will have a value in the range `-1.0..=1.0`.
-    /// - Some axes, such as a variable trigger, will have a value in the range `0.0..=1.0`.
-    /// - Some buttons will also return a value in the range `0.0..=1.0`, such as analog gamepad
+    /// - Some axes, such as an analog stick, will have a value in the range `[-1.0, 1.0]`.
+    /// - Some axes, such as a variable trigger, will have a value in the range `[0.0, 1.0]`.
+    /// - Some buttons will also return a value in the range `[0.0, 1.0]`, such as analog gamepad
     /// triggers which may be tracked as buttons or axes. Examples of these include the Xbox LT/RT
     /// triggers and the Playstation L2/R2 triggers. See also the `axis_inputs` example in the
     /// repository.
@@ -262,11 +356,8 @@ impl<A: Actionlike> ActionState<A> {
 
     /// Get the [`DualAxisData`] from the binding that triggered the corresponding `action`.
     ///
-    /// Only certain events such as [`VirtualDPad`][crate::axislike::VirtualDPad] and
-    /// [`DualAxis`][crate::axislike::DualAxis] provide an [`DualAxisData`], and this
-    /// will return [`None`] for other events.
-    ///
-    /// Chord inputs will return the [`DualAxisData`] of it's first input.
+    /// Only events that represent dual-axis control provide an [`DualAxisData`],
+    /// and this will return [`None`] for other events.
     ///
     /// If multiple inputs with an axis pair trigger the same game action at the same time, the
     /// value of each axis pair will be added together.
@@ -341,6 +432,7 @@ impl<A: Actionlike> ActionState<A> {
             return;
         }
 
+        #[cfg(feature = "timing")]
         if action_data.state.released() {
             action_data.timing.flip();
         }
@@ -359,11 +451,19 @@ impl<A: Actionlike> ActionState<A> {
         // Once released, consumed actions can be pressed again
         action_data.consumed = false;
 
+        #[cfg(feature = "timing")]
         if action_data.state.pressed() {
             action_data.timing.flip();
         }
 
         action_data.state.release();
+    }
+
+    /// Releases all actions
+    pub fn release_all(&mut self) {
+        for action in self.keys() {
+            self.release(&action);
+        }
     }
 
     /// Consumes the `action`
@@ -412,6 +512,7 @@ impl<A: Actionlike> ActionState<A> {
         // This is the only difference from action_state.release(&action)
         action_data.consumed = true;
         action_data.state.release();
+        #[cfg(feature = "timing")]
         action_data.timing.flip();
     }
 
@@ -423,13 +524,6 @@ impl<A: Actionlike> ActionState<A> {
         }
     }
 
-    /// Releases all actions
-    pub fn release_all(&mut self) {
-        for action in self.keys() {
-            self.release(&action);
-        }
-    }
-
     /// Is this `action` currently consumed?
     #[inline]
     #[must_use]
@@ -437,18 +531,72 @@ impl<A: Actionlike> ActionState<A> {
         matches!(self.action_data(action), Some(action_data) if action_data.consumed)
     }
 
+    /// Disables the `action`
+    #[inline]
+    pub fn disable(&mut self, action: &A) {
+        let action_data = match self.action_data_mut(action) {
+            Some(action_data) => action_data,
+            None => {
+                self.set_action_data(action.clone(), ActionData::default());
+                self.action_data_mut(action).unwrap()
+            }
+        };
+
+        action_data.disabled = true;
+    }
+
+    /// Disables all actions
+    #[inline]
+    pub fn disable_all(&mut self) {
+        for action in self.keys() {
+            self.disable(&action);
+        }
+    }
+
+    /// Is this `action` currently disabled?
+    #[inline]
+    #[must_use]
+    pub fn disabled(&mut self, action: &A) -> bool {
+        match self.action_data(action) {
+            Some(action_data) => action_data.disabled,
+            None => false,
+        }
+    }
+
+    /// Enables the `action`
+    #[inline]
+    pub fn enable(&mut self, action: &A) {
+        let action_data = match self.action_data_mut(action) {
+            Some(action_data) => action_data,
+            None => {
+                self.set_action_data(action.clone(), ActionData::default());
+                self.action_data_mut(action).unwrap()
+            }
+        };
+
+        action_data.disabled = false;
+    }
+
+    /// Enables all actions
+    #[inline]
+    pub fn enable_all(&mut self) {
+        for action in self.keys() {
+            self.enable(&action);
+        }
+    }
+
     /// Is this `action` currently pressed?
     #[inline]
     #[must_use]
     pub fn pressed(&self, action: &A) -> bool {
-        matches!(self.action_data(action), Some(action_data) if action_data.state.pressed())
+        matches!(self.action_data(action), Some(action_data) if action_data.pressed())
     }
 
     /// Was this `action` pressed since the last time [tick](ActionState::tick) was called?
     #[inline]
     #[must_use]
     pub fn just_pressed(&self, action: &A) -> bool {
-        matches!(self.action_data(action), Some(action_data) if action_data.state.just_pressed())
+        matches!(self.action_data(action), Some(action_data) if action_data.just_pressed())
     }
 
     /// Is this `action` currently released?
@@ -458,7 +606,7 @@ impl<A: Actionlike> ActionState<A> {
     #[must_use]
     pub fn released(&self, action: &A) -> bool {
         match self.action_data(action) {
-            Some(action_data) => action_data.state.released(),
+            Some(action_data) => action_data.released(),
             None => true,
         }
     }
@@ -467,7 +615,7 @@ impl<A: Actionlike> ActionState<A> {
     #[inline]
     #[must_use]
     pub fn just_released(&self, action: &A) -> bool {
-        matches!(self.action_data(action), Some(action_data) if action_data.state.just_released())
+        matches!(self.action_data(action), Some(action_data) if action_data.just_released())
     }
 
     #[must_use]
@@ -475,7 +623,7 @@ impl<A: Actionlike> ActionState<A> {
     pub fn get_pressed(&self) -> Vec<A> {
         self.action_data
             .iter()
-            .filter(|(_action, data)| data.state.pressed())
+            .filter(|(_action, data)| data.pressed())
             .map(|(action, _data)| action.clone())
             .collect()
     }
@@ -485,7 +633,7 @@ impl<A: Actionlike> ActionState<A> {
     pub fn get_just_pressed(&self) -> Vec<A> {
         self.action_data
             .iter()
-            .filter(|(_action, data)| data.state.just_pressed())
+            .filter(|(_action, data)| data.just_pressed())
             .map(|(action, _data)| action.clone())
             .collect()
     }
@@ -495,7 +643,7 @@ impl<A: Actionlike> ActionState<A> {
     pub fn get_released(&self) -> Vec<A> {
         self.action_data
             .iter()
-            .filter(|(_action, data)| data.state.released())
+            .filter(|(_action, data)| data.released())
             .map(|(action, _data)| action.clone())
             .collect()
     }
@@ -505,7 +653,7 @@ impl<A: Actionlike> ActionState<A> {
     pub fn get_just_released(&self) -> Vec<A> {
         self.action_data
             .iter()
-            .filter(|(_action, data)| data.state.just_released())
+            .filter(|(_action, data)| data.just_released())
             .map(|(action, _data)| action.clone())
             .collect()
     }
@@ -520,6 +668,7 @@ impl<A: Actionlike> ActionState<A> {
     /// that corresponds exactly to the start of a frame, rather than relying on idiosyncratic timing.
     ///
     /// This will also be [`None`] if the action was never pressed or released.
+    #[cfg(feature = "timing")]
     pub fn instant_started(&self, action: &A) -> Option<Instant> {
         let action_data = self.action_data(action)?;
         action_data.timing.instant_started
@@ -528,6 +677,7 @@ impl<A: Actionlike> ActionState<A> {
     /// The [`Duration`] for which the action has been held or released
     ///
     /// This will be [`Duration::ZERO`] if the action was never pressed or released.
+    #[cfg(feature = "timing")]
     pub fn current_duration(&self, action: &A) -> Duration {
         self.action_data(action)
             .map(|data| data.timing.current_duration)
@@ -540,6 +690,7 @@ impl<A: Actionlike> ActionState<A> {
     /// the action was last pressed or released.
     ///
     /// This will be [`Duration::ZERO`] if the action was never pressed or released.
+    #[cfg(feature = "timing")]
     pub fn previous_duration(&self, action: &A) -> Duration {
         self.action_data(action)
             .map(|data| data.timing.previous_duration)
@@ -594,6 +745,7 @@ mod tests {
     use crate::input_map::InputMap;
     use crate::input_mocking::MockInput;
     use crate::input_streams::InputStreams;
+    use crate::prelude::InputChord;
     use bevy::input::InputPlugin;
     use bevy::prelude::*;
     use bevy::utils::{Duration, Instant};
@@ -619,8 +771,8 @@ mod tests {
         input_map.insert(Action::Run, KeyCode::KeyR);
 
         // Starting state
-        let input_streams = InputStreams::from_world(&app.world, None);
-        action_state.update(input_map.which_pressed(&input_streams, ClashStrategy::PressAll));
+        let input_streams = InputStreams::from_world(app.world(), None);
+        action_state.update(input_map.process_actions(&input_streams, ClashStrategy::PressAll));
 
         assert!(!action_state.pressed(&Action::Run));
         assert!(!action_state.just_pressed(&Action::Run));
@@ -628,12 +780,12 @@ mod tests {
         assert!(!action_state.just_released(&Action::Run));
 
         // Pressing
-        app.send_input(KeyCode::KeyR);
+        app.press_input(KeyCode::KeyR);
         // Process the input events into Input<KeyCode> data
         app.update();
-        let input_streams = InputStreams::from_world(&app.world, None);
+        let input_streams = InputStreams::from_world(app.world(), None);
 
-        action_state.update(input_map.which_pressed(&input_streams, ClashStrategy::PressAll));
+        action_state.update(input_map.process_actions(&input_streams, ClashStrategy::PressAll));
 
         assert!(action_state.pressed(&Action::Run));
         assert!(action_state.just_pressed(&Action::Run));
@@ -642,7 +794,7 @@ mod tests {
 
         // Waiting
         action_state.tick(Instant::now(), Instant::now() - Duration::from_micros(1));
-        action_state.update(input_map.which_pressed(&input_streams, ClashStrategy::PressAll));
+        action_state.update(input_map.process_actions(&input_streams, ClashStrategy::PressAll));
 
         assert!(action_state.pressed(&Action::Run));
         assert!(!action_state.just_pressed(&Action::Run));
@@ -652,9 +804,9 @@ mod tests {
         // Releasing
         app.release_input(KeyCode::KeyR);
         app.update();
-        let input_streams = InputStreams::from_world(&app.world, None);
+        let input_streams = InputStreams::from_world(app.world(), None);
 
-        action_state.update(input_map.which_pressed(&input_streams, ClashStrategy::PressAll));
+        action_state.update(input_map.process_actions(&input_streams, ClashStrategy::PressAll));
 
         assert!(!action_state.pressed(&Action::Run));
         assert!(!action_state.just_pressed(&Action::Run));
@@ -663,7 +815,7 @@ mod tests {
 
         // Waiting
         action_state.tick(Instant::now(), Instant::now() - Duration::from_micros(1));
-        action_state.update(input_map.which_pressed(&input_streams, ClashStrategy::PressAll));
+        action_state.update(input_map.process_actions(&input_streams, ClashStrategy::PressAll));
 
         assert!(!action_state.pressed(&Action::Run));
         assert!(!action_state.just_pressed(&Action::Run));
@@ -685,7 +837,7 @@ mod tests {
         let mut input_map = InputMap::default();
         input_map.insert(Action::One, Digit1);
         input_map.insert(Action::Two, Digit2);
-        input_map.insert_chord(Action::OneAndTwo, [Digit1, Digit2]);
+        input_map.insert(Action::OneAndTwo, InputChord::new([Digit1, Digit2]));
 
         let mut app = App::new();
         app.add_plugins(InputPlugin);
@@ -694,20 +846,20 @@ mod tests {
         let mut action_state = ActionState::<Action>::default();
 
         // Starting state
-        let input_streams = InputStreams::from_world(&app.world, None);
+        let input_streams = InputStreams::from_world(app.world(), None);
         action_state
-            .update(input_map.which_pressed(&input_streams, ClashStrategy::PrioritizeLongest));
+            .update(input_map.process_actions(&input_streams, ClashStrategy::PrioritizeLongest));
         assert!(action_state.released(&Action::One));
         assert!(action_state.released(&Action::Two));
         assert!(action_state.released(&Action::OneAndTwo));
 
         // Pressing One
-        app.send_input(Digit1);
+        app.press_input(Digit1);
         app.update();
-        let input_streams = InputStreams::from_world(&app.world, None);
+        let input_streams = InputStreams::from_world(app.world(), None);
 
         action_state
-            .update(input_map.which_pressed(&input_streams, ClashStrategy::PrioritizeLongest));
+            .update(input_map.process_actions(&input_streams, ClashStrategy::PrioritizeLongest));
 
         assert!(action_state.pressed(&Action::One));
         assert!(action_state.released(&Action::Two));
@@ -716,19 +868,19 @@ mod tests {
         // Waiting
         action_state.tick(Instant::now(), Instant::now() - Duration::from_micros(1));
         action_state
-            .update(input_map.which_pressed(&input_streams, ClashStrategy::PrioritizeLongest));
+            .update(input_map.process_actions(&input_streams, ClashStrategy::PrioritizeLongest));
 
         assert!(action_state.pressed(&Action::One));
         assert!(action_state.released(&Action::Two));
         assert!(action_state.released(&Action::OneAndTwo));
 
         // Pressing Two
-        app.send_input(Digit2);
+        app.press_input(Digit2);
         app.update();
-        let input_streams = InputStreams::from_world(&app.world, None);
+        let input_streams = InputStreams::from_world(app.world(), None);
 
         action_state
-            .update(input_map.which_pressed(&input_streams, ClashStrategy::PrioritizeLongest));
+            .update(input_map.process_actions(&input_streams, ClashStrategy::PrioritizeLongest));
 
         // Now only the longest OneAndTwo has been pressed,
         // while both One and Two have been released
@@ -739,7 +891,7 @@ mod tests {
         // Waiting
         action_state.tick(Instant::now(), Instant::now() - Duration::from_micros(1));
         action_state
-            .update(input_map.which_pressed(&input_streams, ClashStrategy::PrioritizeLongest));
+            .update(input_map.process_actions(&input_streams, ClashStrategy::PrioritizeLongest));
 
         assert!(action_state.released(&Action::One));
         assert!(action_state.released(&Action::Two));

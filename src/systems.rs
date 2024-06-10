@@ -4,7 +4,7 @@
 use crate::action_driver::ActionStateDriver;
 use crate::{
     action_state::ActionState, clashing_inputs::ClashStrategy, input_map::InputMap,
-    input_streams::InputStreams, plugin::ToggleActions, Actionlike,
+    input_streams::InputStreams, Actionlike,
 };
 
 use bevy::ecs::prelude::*;
@@ -27,6 +27,38 @@ use crate::action_diff::{ActionDiff, ActionDiffEvent};
 use bevy::ui::Interaction;
 #[cfg(feature = "egui")]
 use bevy_egui::EguiContext;
+
+/// We are about to enter the `Main` schedule, so we:
+/// - save all the changes applied to `state` into the `fixed_update_state`
+/// - switch to loading the `update_state`
+pub fn swap_to_update<A: Actionlike>(
+    mut query: Query<&mut ActionState<A>>,
+    action_state: Option<ResMut<ActionState<A>>>,
+) {
+    if let Some(mut action_state) = action_state {
+        action_state.swap_to_update_state();
+    }
+
+    for mut action_state in query.iter_mut() {
+        action_state.swap_to_update_state();
+    }
+}
+
+/// We are about to enter the `FixedMain` schedule, so we:
+/// - save all the changes applied to `state` into the `update_state`
+/// - switch to loading the `fixed_update_state`
+pub fn swap_to_fixed_update<A: Actionlike>(
+    mut query: Query<&mut ActionState<A>>,
+    action_state: Option<ResMut<ActionState<A>>>,
+) {
+    if let Some(mut action_state) = action_state {
+        action_state.swap_to_fixed_update_state();
+    }
+
+    for mut action_state in query.iter_mut() {
+        action_state.swap_to_fixed_update_state();
+    }
+}
 
 /// Advances actions timer.
 ///
@@ -136,7 +168,7 @@ pub fn update_action_state<A: Actionlike>(
             associated_gamepad: input_map.gamepad(),
         };
 
-        action_state.update(input_map.which_pressed(&input_streams, *clash_strategy));
+        action_state.update(input_map.process_actions(&input_streams, *clash_strategy));
     }
 }
 
@@ -277,22 +309,6 @@ pub fn generate_action_diffs<A: Actionlike>(
     }
 }
 
-/// Release all inputs if the [`ToggleActions<A>`] resource exists and its `enabled` field is false.
-pub fn release_on_disable<A: Actionlike>(
-    mut query: Query<&mut ActionState<A>>,
-    resource: Option<ResMut<ActionState<A>>>,
-    toggle_actions: Res<ToggleActions<A>>,
-) {
-    if toggle_actions.is_changed() && !toggle_actions.enabled {
-        for mut action_state in query.iter_mut() {
-            action_state.release_all();
-        }
-        if let Some(mut action_state) = resource {
-            action_state.release_all();
-        }
-    }
-}
-
 /// Release all inputs when an [`InputMap<A>`] is removed to prevent them from being held forever.
 ///
 /// By default, [`InputManagerPlugin<A>`](crate::plugin::InputManagerPlugin) will run this on [`PostUpdate`](bevy::prelude::PostUpdate).
@@ -325,9 +341,4 @@ pub fn release_on_input_map_removed<A: Actionlike>(
         // Reset our local so our removal detection is only triggered once.
         *input_map_resource_existed = false;
     }
-}
-
-/// Uses the value of [`ToggleActions<A>`] to determine if input manager systems of the type `A` should run.
-pub fn run_if_enabled<A: Actionlike>(toggle_actions: Res<ToggleActions<A>>) -> bool {
-    toggle_actions.enabled
 }

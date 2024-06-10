@@ -1,6 +1,5 @@
 //! Demonstrates how to "consume" actions, so they can only be responded to by a single system
 
-use bevy::ecs::system::Resource;
 use bevy::prelude::*;
 use leafwing_input_manager::prelude::*;
 
@@ -26,7 +25,7 @@ fn main() {
         .add_systems(Update, close_menu::<SubMenu>.before(close_menu::<MainMenu>))
         // We can do this by ordering our systems and using `ActionState::consume`
         .add_systems(Update, close_menu::<MainMenu>)
-        .run()
+        .run();
 }
 
 #[derive(Actionlike, Debug, Clone, Reflect, PartialEq, Eq, Hash)]

@@ -4,7 +4,6 @@
 //! See [`ClashStrategy`] for more details.
 
 use bevy::prelude::*;
-use leafwing_input_manager::clashing_inputs::ClashStrategy;
 use leafwing_input_manager::prelude::*;
 
 fn main() {
@@ -15,7 +14,7 @@ fn main() {
         .add_systems(Update, report_pressed_actions)
         // Change the value of this resource to change how clashes should be handled in your game
         .insert_resource(ClashStrategy::PrioritizeLongest)
-        .run()
+        .run();
 }
 
 #[derive(Actionlike, Debug, Clone, Copy, PartialEq, Eq, Hash, Reflect)]
@@ -33,16 +32,14 @@ fn spawn_input_map(mut commands: Commands) {
     use KeyCode::*;
     use TestAction::*;
 
-    let mut input_map = InputMap::default();
-
     // Setting up input mappings in the obvious way
-    input_map.insert_multiple([(One, Digit1), (Two, Digit2), (Three, Digit3)]);
+    let mut input_map = InputMap::new([(One, Digit1), (Two, Digit2), (Three, Digit3)]);
 
-    input_map.insert_chord(OneAndTwo, [Digit1, Digit2]);
-    input_map.insert_chord(OneAndThree, [Digit1, Digit3]);
-    input_map.insert_chord(TwoAndThree, [Digit2, Digit3]);
+    input_map.insert(OneAndTwo, InputChord::new([Digit1, Digit2]));
+    input_map.insert(OneAndThree, InputChord::new([Digit1, Digit3]));
+    input_map.insert(TwoAndThree, InputChord::new([Digit2, Digit3]));
 
-    input_map.insert_chord(OneAndTwoAndThree, [Digit1, Digit2, Digit3]);
+    input_map.insert(OneAndTwoAndThree, InputChord::new([Digit1, Digit2, Digit3]));
 
     commands.spawn(InputManagerBundle::with_map(input_map));
 }

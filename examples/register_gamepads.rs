@@ -9,7 +9,7 @@ fn main() {
         .add_plugins(InputManagerPlugin::<Action>::default())
         .init_resource::<JoinedPlayers>()
         .add_systems(Update, (join, jump, disconnect))
-        .run()
+        .run();
 }
 
 #[derive(Actionlike, PartialEq, Eq, Clone, Copy, Hash, Debug, Reflect)]
@@ -49,8 +49,7 @@ fn join(
                     (Action::Disconnect, GamepadButtonType::Select),
                 ])
                 // Make sure to set the gamepad or all gamepads will be used!
-                .set_gamepad(gamepad)
-                .build();
+                .with_gamepad(gamepad);
                 let player = commands
                     .spawn(InputManagerBundle::with_map(input_map))
                     .insert(Player { gamepad })

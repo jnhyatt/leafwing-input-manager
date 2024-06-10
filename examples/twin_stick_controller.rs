@@ -39,18 +39,18 @@ pub enum PlayerAction {
 }
 
 impl PlayerAction {
-    /// Define the default binding to the input
+    /// Define the default bindings to the input
     fn default_input_map() -> InputMap<Self> {
         let mut input_map = InputMap::default();
 
         // Default gamepad input bindings
-        input_map.insert(Self::Move, DualAxis::left_stick());
-        input_map.insert(Self::Look, DualAxis::right_stick());
+        input_map.insert(Self::Move, GamepadStick::LEFT);
+        input_map.insert(Self::Look, GamepadStick::RIGHT);
         input_map.insert(Self::Shoot, GamepadButtonType::RightTrigger);
 
         // Default kbm input bindings
-        input_map.insert(Self::Move, VirtualDPad::wasd());
-        input_map.insert(Self::Look, VirtualDPad::arrow_keys());
+        input_map.insert(Self::Move, KeyboardVirtualDPad::WASD);
+        input_map.insert(Self::Look, KeyboardVirtualDPad::ARROW_KEYS);
         input_map.insert(Self::Shoot, MouseButton::Left);
 
         input_map
@@ -133,7 +133,9 @@ fn player_mouse_look(
     if let Some(p) = window
         .cursor_position()
         .and_then(|cursor| camera.viewport_to_world(camera_transform, cursor))
-        .and_then(|ray| Some(ray).zip(ray.intersect_plane(player_position, Plane3d::new(Vec3::Y))))
+        .and_then(|ray| {
+            Some(ray).zip(ray.intersect_plane(player_position, InfinitePlane3d::new(Vec3::Y)))
+        })
         .map(|(ray, p)| ray.get_point(p))
     {
         let diff = (p - player_position).xz();

@@ -7,7 +7,7 @@ fn main() {
         .add_plugins(InputManagerPlugin::<CameraMovement>::default())
         .add_systems(Startup, setup)
         .add_systems(Update, pan_camera)
-        .run()
+        .run();
 }
 
 #[derive(Actionlike, Clone, Debug, Copy, PartialEq, Eq, Hash, Reflect)]
@@ -19,8 +19,8 @@ fn setup(mut commands: Commands) {
     let input_map = InputMap::new([
         // This will capture the total continuous value, for direct use.
         // Note that you can also use discrete gesture-like motion,
-        // via the `MouseMotionDirection` enum.
-        (CameraMovement::Pan, DualAxis::mouse_motion()),
+        // via the `MouseMoveDirection` enum.
+        (CameraMovement::Pan, MouseMove::default()),
     ]);
     commands
         .spawn(Camera2dBundle::default())
